@@ -1,76 +1,85 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:padding="16dp">
 
     <LinearLayout
         android:orientation="vertical"
-        android:padding="16dp"
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
-        <!-- Summary card -->
+        <!-- Summary Card -->
         <LinearLayout
             android:orientation="vertical"
             android:padding="16dp"
-            android:background="#F5F5F5"
+            android:background="#F6F6F6"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="16dp">
+
+            <TextView
+                android:text="Daily Summary"
+                android:textStyle="bold"
+                android:textSize="18sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"/>
 
             <TextView
                 android:id="@+id/tvSummary"
-                android:text="Loading statistics..."
-                android:textSize="16sp"
+                android:text="Loading..."
+                android:textSize="15sp"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content" />
+                android:layout_height="wrap_content"/>
         </LinearLayout>
 
-        <!-- Elevator breakdown card -->
+        <!-- Per Elevator Card -->
         <LinearLayout
             android:orientation="vertical"
             android:padding="16dp"
-            android:background="#F5F5F5"
+            android:background="#F6F6F6"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="16dp">
 
             <TextView
-                android:text="Per-Elevator Breakdown"
+                android:text="Per-Elevator Metrics"
                 android:textStyle="bold"
-                android:textSize="16sp"
+                android:textSize="18sp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="8dp" />
+                android:layout_marginBottom="8dp"/>
 
             <TextView
                 android:id="@+id/tvElevatorBreakdown"
                 android:textSize="14sp"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content" />
+                android:layout_height="wrap_content"/>
         </LinearLayout>
 
-        <!-- Trips per hour chart -->
+        <!-- Chart Card -->
         <LinearLayout
             android:orientation="vertical"
             android:padding="16dp"
-            android:background="#F5F5F5"
+            android:background="#F6F6F6"
             android:layout_width="match_parent"
             android:layout_height="wrap_content">
 
             <TextView
                 android:text="Trips per Hour"
                 android:textStyle="bold"
-                android:textSize="16sp"
+                android:textSize="18sp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="8dp" />
+                android:layout_marginBottom="8dp"/>
 
             <com.github.mikephil.charting.charts.LineChart
                 android:id="@+id/chartTrips"
                 android:layout_width="match_parent"
-                android:layout_height="300dp" />
+                android:layout_height="300dp"/>
         </LinearLayout>
 
     </LinearLayout>
 </ScrollView>
+

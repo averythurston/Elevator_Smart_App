@@ -1,23 +1,23 @@
-// sim_server.cpp — Full elevator + passenger traffic simulation with stats
-// Build on Windows (MinGW):
+// sim_server.cpp — Multi-elevator passenger simulation with real stats.
+// Windows build (MinGW):
 //   g++ sim_server.cpp -o sim_server -std=c++17 -lws2_32
-//
 // Run:
 //   .\sim_server
 //
-// Android emulator base URL:
-//   http://10.0.2.2:8080/
+// Endpoints:
+//   GET /state
+//   GET /stats/daily
 
 #include <iostream>
 #include <thread>
 #include <vector>
 #include <deque>
-#include <atomic>
 #include <mutex>
 #include <chrono>
 #include <random>
 #include <sstream>
 #include <string>
+#include <cmath>
 
 #ifdef _WIN32
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
@@ -29,28 +29,20 @@
 using Clock     = std::chrono::steady_clock;
 using TimePoint = Clock::time_point;
 
-// -----------------------------
-// DATA STRUCTURES
-// -----------------------------
-
 struct Passenger {
     int startFloor;
     int destFloor;
-    int direction;      // +1 up, -1 down
-    TimePoint created;  // when they arrived at the floor
+    int direction;     // +1 up, -1 down
+    TimePoint created;
 };
 
-enum class ElevatorState {
-    Idle,
-    Moving,
-    DoorOpen
-};
+enum class ElevatorState { Idle, Moving, DoorOpen };
 
 struct Elevator {
     int id;
     int currentFloor;
     int targetFloor;
-    int direction;          // +1 up, -1 down, 0 idle
+    int direction; // +1 up, -1 down, 0 idle
     bool doorOpen;
     ElevatorState state;
     TimePoint stateEndTime;
@@ -58,7 +50,7 @@ struct Elevator {
     int capacity = 10;
     std::vector<Passenger> onboard;
 
-    // Per-elevator stats
+    // per-elevator stats
     int trips = 0;
     int passengersMoved = 0;
     double energyKWh = 0.0;
@@ -75,8 +67,8 @@ struct HourlyBucket {
 
 struct GlobalStats {
     int totalTrips = 0;
-    int totalPassengers = 0;        // spawned
-    int completedPassengers = 0;    // actually moved
+    int totalPassengers = 0;
+    int completedPassengers = 0;
 
     double totalEnergyKWh = 0.0;
     double totalWaitSec = 0.0;
@@ -86,11 +78,9 @@ struct GlobalStats {
 
 int gFloors = 5;
 std::vector<Elevator> gElevators;
-std::vector<std::deque<Passenger>> floorUpQueue;
-std::vector<std::deque<Passenger>> floorDownQueue;
+std::vector<std::deque<Passenger>> upQ, downQ;
 GlobalStats gStats;
 HourlyBucket gHourly[24];
-
 std::mutex gMutex;
 
 std::mt19937& rng() {
@@ -98,260 +88,190 @@ std::mt19937& rng() {
     return gen;
 }
 
-// -----------------------------
-// TIMING HELPERS
-// -----------------------------
-
-// Realistic move timing:
-// 1 floor: 7.5 s
-// 2 floors: 7.5 + 7.5 = 15 s
-// >=3 floors: 7.5 + 7.5 + 7.0*(floors-2)
-double compute_travel_time_sec(int floors) {
+// timing: 1 floor 7.5s, middle floors 7s, last leg 7.5s
+double travel_time_sec(int floors) {
     if (floors <= 1) return 7.5;
     return 7.5 + 7.5 + 7.0 * (floors - 2);
 }
 
-// Fake "hour of day" based on simulation time
-int get_fake_hour() {
+// fake hour (30 seconds real = 1 hour sim)
+int fake_hour() {
     auto now = Clock::now().time_since_epoch();
-    long seconds = std::chrono::duration_cast<std::chrono::seconds>(now).count();
-    // Every 30 seconds of real time = 1 simulated hour
-    return static_cast<int>((seconds / 30) % 24);
+    long sec = std::chrono::duration_cast<std::chrono::seconds>(now).count();
+    return (sec / 30) % 24;
 }
 
-// -----------------------------
-// TRAFFIC GENERATION
-// -----------------------------
-
-double spawn_rate_for_hour(int hour) {
-    if (hour >= 7 && hour < 10) return 0.25;  // morning rush
-    if (hour >= 11 && hour < 14) return 0.15; // lunch
-    if (hour >= 16 && hour < 19) return 0.30; // evening rush
-    return 0.05;                              // low
+double spawn_rate_per_min(int h) {
+    if (h >= 7 && h < 10) return 0.25;
+    if (h >= 11 && h < 14) return 0.15;
+    if (h >= 16 && h < 19) return 0.30;
+    return 0.05;
 }
 
-bool should_spawn(double ratePerSecond) {
+bool should_spawn(double ratePerSec) {
     std::uniform_real_distribution<double> dist(0.0, 1.0);
-    return dist(rng()) < ratePerSecond;
+    return dist(rng()) < ratePerSec;
 }
 
-Passenger create_passenger(int floor) {
+Passenger make_passenger(int floor) {
     std::uniform_int_distribution<int> dist(1, gFloors);
     int dest = floor;
     while (dest == floor) dest = dist(rng());
 
     Passenger p;
     p.startFloor = floor;
-    p.destFloor  = dest;
-    p.direction  = (dest > floor ? +1 : -1);
-    p.created    = Clock::now();
+    p.destFloor = dest;
+    p.direction = (dest > floor ? +1 : -1);
+    p.created = Clock::now();
     return p;
 }
 
-void generate_passenger_traffic() {
-    using namespace std::chrono;
-
-    int hour         = get_fake_hour();
-    double ratePerMin = spawn_rate_for_hour(hour);
-    double ratePerSec = ratePerMin / 60.0;
+void generate_traffic() {
+    int h = fake_hour();
+    double rateMin = spawn_rate_per_min(h);
+    double rateSec = rateMin / 60.0;
 
     for (int f = 1; f <= gFloors; ++f) {
-        if (should_spawn(ratePerSec)) {
-            Passenger p = create_passenger(f);
-
-            if (p.direction == +1)
-                floorUpQueue[f].push_back(p);
-            else
-                floorDownQueue[f].push_back(p);
-
+        if (should_spawn(rateSec)) {
+            Passenger p = make_passenger(f);
+            if (p.direction == +1) upQ[f].push_back(p);
+            else downQ[f].push_back(p);
             gStats.totalPassengers++;
         }
     }
 }
 
-// -----------------------------
-// DISPATCH LOGIC
-// -----------------------------
-
-int choose_next_target_for_elevator(const Elevator& e) {
-    if (!e.onboard.empty()) {
+int choose_next_target(const Elevator& e) {
+    if (!e.onboard.empty())
         return e.onboard.front().destFloor;
-    }
 
-    int current = e.currentFloor;
-    int bestFloor = -1;
-    int bestDist  = 999;
+    int best = e.currentFloor;
+    int bestDist = 999;
 
     for (int f = 1; f <= gFloors; ++f) {
-        bool hasQueue = !floorUpQueue[f].empty() || !floorDownQueue[f].empty();
-        if (!hasQueue) continue;
-
-        int dist = std::abs(f - current);
-        if (dist < bestDist) {
-            bestDist  = dist;
-            bestFloor = f;
-        }
+        if (upQ[f].empty() && downQ[f].empty()) continue;
+        int d = std::abs(f - e.currentFloor);
+        if (d < bestDist) { bestDist = d; best = f; }
     }
-
-    if (bestFloor != -1) return bestFloor;
-
-    return current;
+    return best;
 }
-
-// -----------------------------
-// ELEVATOR UPDATE
-// -----------------------------
 
 void update_elevator(Elevator& e, TimePoint now) {
     using namespace std::chrono;
 
     if (e.state == ElevatorState::Idle) {
         if (now >= e.stateEndTime) {
-            int nextFloor = choose_next_target_for_elevator(e);
-
-            if (nextFloor == e.currentFloor) {
-                e.direction    = 0;
-                e.doorOpen     = false;
-                e.state        = ElevatorState::Idle;
+            int next = choose_next_target(e);
+            if (next == e.currentFloor) {
+                e.direction = 0;
                 e.stateEndTime = now + seconds(1);
                 return;
             }
 
-            e.targetFloor = nextFloor;
-            int diff      = e.targetFloor - e.currentFloor;
-            int floors    = std::abs(diff);
+            e.targetFloor = next;
+            int diff = e.targetFloor - e.currentFloor;
+            int floors = std::abs(diff);
 
-            e.direction = (diff > 0 ? +1 : -1);
-            e.doorOpen  = false;
-            e.state     = ElevatorState::Moving;
+            e.direction = diff > 0 ? +1 : -1;
+            e.doorOpen = false;
+            e.state = ElevatorState::Moving;
 
-            double travelSec = compute_travel_time_sec(floors);
-            auto travelDur   = duration_cast<Clock::duration>(duration<double>(travelSec));
-            e.stateEndTime   = now + travelDur;
+            double tSec = travel_time_sec(floors);
+            e.stateEndTime = now + duration_cast<Clock::duration>(duration<double>(tSec));
 
-            // Trip-level stats
+            // trip stats
             gStats.totalTrips++;
             gStats.completedTrips++;
-            gStats.totalTripSec += travelSec;
+            gStats.totalTripSec += tSec;
             e.trips++;
 
-            int hour = get_fake_hour();
-            gHourly[hour].trips++;
+            int h = fake_hour();
+            gHourly[h].trips++;
         }
-
-    } else if (e.state == ElevatorState::Moving) {
+    }
+    else if (e.state == ElevatorState::Moving) {
         if (now >= e.stateEndTime) {
             int diff = std::abs(e.targetFloor - e.currentFloor);
-            double sec = compute_travel_time_sec(diff);
+            double tSec = travel_time_sec(diff);
 
-            double loadFactor = 1.0 + 0.05 * static_cast<double>(e.onboard.size());
+            double loadFactor = 1.0 + 0.05 * e.onboard.size();
             double energy = 0.05 * diff * loadFactor;
 
             gStats.totalEnergyKWh += energy;
-            e.energyKWh           += energy;
-
-            int hour = get_fake_hour();
-            gHourly[hour].energyKWh += energy;
+            e.energyKWh += energy;
+            gHourly[fake_hour()].energyKWh += energy;
 
             e.currentFloor = e.targetFloor;
-            e.direction    = 0;
-            e.doorOpen     = true;
-            e.state        = ElevatorState::DoorOpen;
-            e.stateEndTime = now + seconds(5);
+            e.direction = 0;
+            e.doorOpen = true;
+            e.state = ElevatorState::DoorOpen;
+            e.stateEndTime = now + seconds(5); // doors open/close timing
 
             e.stopCount++;
             e.doorOpenCount++;
 
-            // Passengers EXIT
+            // exit
             auto it = e.onboard.begin();
             while (it != e.onboard.end()) {
                 if (it->destFloor == e.currentFloor) {
                     gStats.completedPassengers++;
                     e.passengersMoved++;
                     it = e.onboard.erase(it);
-                } else {
-                    ++it;
+                } else ++it;
+            }
+
+            // enter
+            int capLeft = e.capacity - (int)e.onboard.size();
+            auto& U = upQ[e.currentFloor];
+            auto& D = downQ[e.currentFloor];
+
+            auto board = [&](std::deque<Passenger>& q) {
+                while (capLeft > 0 && !q.empty()) {
+                    Passenger p = q.front(); q.pop_front();
+                    double waitSec = duration<double>(now - p.created).count();
+
+                    gStats.totalWaitSec += waitSec;
+                    int h2 = fake_hour();
+                    gHourly[h2].totalWaitSec += waitSec;
+                    gHourly[h2].waitCount++;
+
+                    e.onboard.push_back(p);
+                    capLeft--;
                 }
-            }
+            };
 
-            // Passengers ENTER
-            int capLeft = e.capacity - static_cast<int>(e.onboard.size());
-
-            auto& upQ = floorUpQueue[e.currentFloor];
-            while (capLeft > 0 && !upQ.empty()) {
-                Passenger p = upQ.front(); upQ.pop_front();
-                double waitSec =
-                    duration<double>(now - p.created).count();
-                gStats.totalWaitSec += waitSec;
-
-                int hour2 = get_fake_hour();
-                gHourly[hour2].totalWaitSec += waitSec;
-                gHourly[hour2].waitCount++;
-
-                e.onboard.push_back(p);
-                e.passengersMoved++;
-                gStats.completedPassengers++;
-                capLeft--;
-            }
-
-            auto& downQ = floorDownQueue[e.currentFloor];
-            while (capLeft > 0 && !downQ.empty()) {
-                Passenger p = downQ.front(); downQ.pop_front();
-                double waitSec =
-                    duration<double>(now - p.created).count();
-                gStats.totalWaitSec += waitSec;
-
-                int hour2 = get_fake_hour();
-                gHourly[hour2].totalWaitSec += waitSec;
-                gHourly[hour2].waitCount++;
-
-                e.onboard.push_back(p);
-                e.passengersMoved++;
-                gStats.completedPassengers++;
-                capLeft--;
-            }
+            board(U);
+            board(D);
         }
-
-    } else if (e.state == ElevatorState::DoorOpen) {
+    }
+    else if (e.state == ElevatorState::DoorOpen) {
         if (now >= e.stateEndTime) {
             e.doorOpen = false;
-            e.state    = ElevatorState::Idle;
-            e.stateEndTime = now + std::chrono::seconds(1);
+            e.state = ElevatorState::Idle;
+            e.stateEndTime = now + seconds(1);
         }
     }
 }
 
-// -----------------------------
-// SIMULATION LOOP
-// -----------------------------
-
-void simulation_loop() {
-    using namespace std::chrono;
-
+void sim_loop() {
     while (true) {
         auto now = Clock::now();
-
         {
             std::lock_guard<std::mutex> lock(gMutex);
-
-            generate_passenger_traffic();
-
-            for (auto& e : gElevators) {
+            generate_traffic();
+            for (auto& e : gElevators)
                 update_elevator(e, now);
-            }
         }
-
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
-// -----------------------------
-// JSON BUILDERS
-// -----------------------------
-
-std::string build_state_json() {
+// ✅ UPDATED: /state now includes state + remainingMs
+std::string state_json() {
     std::lock_guard<std::mutex> lock(gMutex);
     std::ostringstream out;
+
+    auto now = Clock::now();
 
     out << "{";
     out << "\"floorCount\":" << gFloors << ",";
@@ -359,7 +279,19 @@ std::string build_state_json() {
 
     for (size_t i = 0; i < gElevators.size(); ++i) {
         const auto& e = gElevators[i];
-        if (i > 0) out << ",";
+        if (i) out << ",";
+
+        long long remainingMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(e.stateEndTime - now).count();
+        if (remainingMs < 0) remainingMs = 0;
+
+        std::string stateStr;
+        switch (e.state) {
+            case ElevatorState::Idle:     stateStr = "Idle"; break;
+            case ElevatorState::Moving:   stateStr = "Moving"; break;
+            case ElevatorState::DoorOpen: stateStr = "DoorOpen"; break;
+        }
+
         out << "{"
             << "\"id\":" << e.id
             << ",\"currentFloor\":" << e.currentFloor
@@ -368,6 +300,8 @@ std::string build_state_json() {
             << ",\"doorOpen\":" << (e.doorOpen ? "true" : "false")
             << ",\"load\":" << e.onboard.size()
             << ",\"capacity\":" << e.capacity
+            << ",\"state\":\"" << stateStr << "\""
+            << ",\"remainingMs\":" << remainingMs
             << "}";
     }
 
@@ -375,51 +309,42 @@ std::string build_state_json() {
     return out.str();
 }
 
-std::string build_stats_json() {
+std::string stats_json() {
     std::lock_guard<std::mutex> lock(gMutex);
 
-    int totalTrips   = gStats.totalTrips;
-    int totalPass    = gStats.totalPassengers;
+    double avgWait =
+        gStats.completedPassengers > 0
+            ? gStats.totalWaitSec / gStats.completedPassengers
+            : 0.0;
 
-    double avgWaitSec =
-        (gStats.completedPassengers > 0)
-            ? (gStats.totalWaitSec / gStats.completedPassengers)
-            : 5.0;
-
-    double avgTripSec =
-        (gStats.completedTrips > 0)
-            ? (gStats.totalTripSec / gStats.completedTrips)
-            : 15.0;
+    double avgTrip =
+        gStats.completedTrips > 0
+            ? gStats.totalTripSec / gStats.completedTrips
+            : 0.0;
 
     double avgEnergy =
-        (totalTrips > 0)
-            ? (gStats.totalEnergyKWh / totalTrips)
-            : 0.2;
+        gStats.totalTrips > 0
+            ? gStats.totalEnergyKWh / gStats.totalTrips
+            : 0.0;
 
-    int peakHour = 0;
-    int maxTrips = 0;
-    for (int h = 0; h < 24; ++h) {
-        if (gHourly[h].trips > maxTrips) {
-            maxTrips = gHourly[h].trips;
-            peakHour = h;
-        }
-    }
+    int peakHour = 0, maxTrips = 0;
+    for (int h = 0; h < 24; ++h)
+        if (gHourly[h].trips > maxTrips) { maxTrips = gHourly[h].trips; peakHour = h; }
 
     std::ostringstream out;
     out << "{";
     out << "\"floorCount\":" << gFloors << ",";
-    out << "\"totalTrips\":" << totalTrips << ",";
-    out << "\"totalPassengers\":" << totalPass << ",";
-    out << "\"avgWaitSec\":" << avgWaitSec << ",";
-    out << "\"avgTripSec\":" << avgTripSec << ",";
+    out << "\"totalTrips\":" << gStats.totalTrips << ",";
+    out << "\"totalPassengers\":" << gStats.totalPassengers << ",";
+    out << "\"avgWaitSec\":" << avgWait << ",";
+    out << "\"avgTripSec\":" << avgTrip << ",";
     out << "\"avgEnergyKWh\":" << avgEnergy << ",";
     out << "\"peakHour\":" << peakHour << ",";
 
-    // Per-elevator stats
     out << "\"elevators\":[";
     for (size_t i = 0; i < gElevators.size(); ++i) {
         const auto& e = gElevators[i];
-        if (i > 0) out << ",";
+        if (i) out << ",";
         out << "{"
             << "\"id\":" << e.id
             << ",\"trips\":" << e.trips
@@ -431,29 +356,23 @@ std::string build_stats_json() {
     }
     out << "],";
 
-    // Hourly stats array
     out << "\"hourly\":[";
     for (int h = 0; h < 24; ++h) {
-        if (h > 0) out << ",";
-        double avgHWait =
-            (gHourly[h].waitCount > 0)
-                ? (gHourly[h].totalWaitSec / gHourly[h].waitCount)
+        if (h) out << ",";
+        double hAvgWait =
+            gHourly[h].waitCount > 0
+                ? gHourly[h].totalWaitSec / gHourly[h].waitCount
                 : 0.0;
         out << "{"
             << "\"hour\":" << h
             << ",\"trips\":" << gHourly[h].trips
-            << ",\"avgWaitSec\":" << avgHWait
+            << ",\"avgWaitSec\":" << hAvgWait
             << ",\"energyKWh\":" << gHourly[h].energyKWh
             << "}";
     }
     out << "]}";
-
     return out.str();
 }
-
-// -----------------------------
-// HTTP UTILITIES
-// -----------------------------
 
 std::string http_ok(const std::string& body) {
     std::ostringstream out;
@@ -465,100 +384,71 @@ std::string http_ok(const std::string& body) {
     return out.str();
 }
 
-void handle_client(SOCKET client) {
-    char buffer[4096];
-    int n = recv(client, buffer, sizeof(buffer) - 1, 0);
-    if (n <= 0) {
-        closesocket(client);
-        return;
-    }
-    buffer[n] = '\0';
+void handle_client(SOCKET c) {
+    char buf[4096];
+    int n = recv(c, buf, sizeof(buf)-1, 0);
+    if (n <= 0) { closesocket(c); return; }
+    buf[n] = 0;
+    std::string req(buf), resp;
 
-    std::string req(buffer);
-    std::string resp;
-
-    if (req.find("GET /state") != std::string::npos) {
-        resp = http_ok(build_state_json());
-    } else if (req.find("GET /stats/daily") != std::string::npos ||
-               req.find("GET /stats") != std::string::npos) {
-        resp = http_ok(build_stats_json());
-    } else {
+    if (req.find("GET /state") != std::string::npos)
+        resp = http_ok(state_json());
+    else if (req.find("GET /stats") != std::string::npos)
+        resp = http_ok(stats_json());
+    else
         resp = http_ok("{\"error\":\"not found\"}");
-    }
 
-    send(client, resp.c_str(), (int)resp.size(), 0);
-    closesocket(client);
+    send(c, resp.c_str(), (int)resp.size(), 0);
+    closesocket(c);
 }
-
-// -----------------------------
-// MAIN
-// -----------------------------
 
 int main() {
     WSADATA w;
-    if (WSAStartup(MAKEWORD(2, 2), &w) != 0) {
+    if (WSAStartup(MAKEWORD(2,2), &w) != 0) {
         std::cerr << "WSAStartup failed\n";
         return 1;
     }
 
     {
         std::lock_guard<std::mutex> lock(gMutex);
-
         gFloors = 5;
-        floorUpQueue.assign(gFloors + 1, {});
-        floorDownQueue.assign(gFloors + 1, {});
+
+        upQ.assign(gFloors + 1, {});
+        downQ.assign(gFloors + 1, {});
 
         for (int i = 0; i < 3; ++i) {
             Elevator e;
-            e.id           = i + 1;
+            e.id = i + 1;
             e.currentFloor = i + 1;
-            e.targetFloor  = e.currentFloor;
-            e.direction    = 0;
-            e.doorOpen     = true;
-            e.state        = ElevatorState::DoorOpen;
+            e.targetFloor = e.currentFloor;
+            e.direction = 0;
+            e.doorOpen = true;
+            e.state = ElevatorState::DoorOpen;
             e.stateEndTime = Clock::now() + std::chrono::seconds(5);
-            e.capacity     = 10;
             gElevators.push_back(e);
         }
     }
 
-    std::thread(simulation_loop).detach();
+    std::thread(sim_loop).detach();
 
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET) {
-        std::cerr << "socket() failed\n";
-        WSACleanup();
-        return 1;
-    }
-
+    SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
-    addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(8080);
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(8080);
     addr.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        std::cerr << "bind() failed\n";
-        closesocket(sock);
-        WSACleanup();
-        return 1;
-    }
+    bind(s, (sockaddr*)&addr, sizeof(addr));
+    listen(s, 10);
 
-    if (listen(sock, 10) == SOCKET_ERROR) {
-        std::cerr << "listen() failed\n";
-        closesocket(sock);
-        WSACleanup();
-        return 1;
-    }
-
-    std::cout << "Simulation server running at http://localhost:8080\n";
+    std::cout << "Sim server at http://localhost:8080\n";
 
     while (true) {
-        SOCKET client = accept(sock, NULL, NULL);
-        if (client == INVALID_SOCKET) continue;
-        std::thread(handle_client, client).detach();
+        SOCKET c = accept(s, NULL, NULL);
+        if (c != INVALID_SOCKET)
+            std::thread(handle_client, c).detach();
     }
 
-    closesocket(sock);
+    closesocket(s);
     WSACleanup();
     return 0;
 }

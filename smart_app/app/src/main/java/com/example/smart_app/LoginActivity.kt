@@ -13,45 +13,39 @@ import kotlinx.coroutines.withContext
 
 class LoginActivity : AppCompatActivity() {
 
-    private val api by lazy {
-        SimApi.create("http://10.0.2.2:8080/")
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_login)
 
-        val btnSimulation = findViewById<Button>(R.id.btnSimulation)
-        val btnPrototype = findViewById<Button>(R.id.btnPrototype)
+        val btnSim = findViewById<Button>(R.id.btnSimulation)
+        val btnProto = findViewById<Button>(R.id.btnPrototype)
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
 
-        btnSimulation.setOnClickListener {
-            tvStatus.text = "Connecting to simulation server..."
+        btnSim.setOnClickListener {
+            tvStatus.text = "Connecting to simulation..."
 
             lifecycleScope.launch {
                 try {
-                    val state = withContext(Dispatchers.IO) { api.getState() }
-                    val floorCount = state.floorCount
+                    val state = withContext(Dispatchers.IO) { SimApi.api.getState() }
+                    val floors = state.floorCount
 
-                    tvStatus.text = "Connected — $floorCount floors detected."
+                    tvStatus.text = "Connected — $floors floors detected."
 
-                    val intent = Intent(this@LoginActivity, VisualSimulationActivity::class.java)
-                    intent.putExtra("mode", "simulation")
-                    intent.putExtra("floorCount", floorCount)
-                    startActivity(intent)
-
+                    val i = Intent(this@LoginActivity, VisualSimulationActivity::class.java)
+                    i.putExtra("mode", "simulation")
+                    i.putExtra("floorCount", floors)
+                    startActivity(i)
                 } catch (e: Exception) {
                     tvStatus.text = "Simulation server unreachable."
                 }
             }
         }
 
-        btnPrototype.setOnClickListener {
-            val intent = Intent(this, VisualSimulationActivity::class.java)
-            intent.putExtra("mode", "prototype")
-            intent.putExtra("floorCount", 5) // placeholder for future prototype logic
-            startActivity(intent)
+        btnProto.setOnClickListener {
+            val i = Intent(this, VisualSimulationActivity::class.java)
+            i.putExtra("mode", "prototype")
+            i.putExtra("floorCount", 5) // placeholder
+            startActivity(i)
         }
     }
 }
-

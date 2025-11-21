@@ -1,122 +1,233 @@
 package com.example.smart_app
 
-import android.animation.ArgbEvaluator
-import android.animation.ObjectAnimator
 import android.content.Intent
 import android.graphics.Color
-import android.os.Bundle
+import android.os.*
 import android.view.Gravity
 import android.view.View
-import android.widget.Button
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.example.smart_app.data.ElevatorState
 import com.example.smart_app.data.SimApi
 import kotlinx.coroutines.*
-import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 class VisualSimulationActivity : AppCompatActivity() {
 
-    private lateinit var elevator1: TextView
-    private lateinit var elevator2: TextView
-    private lateinit var elevator3: TextView
-
     private lateinit var tvBuilding: TextView
-    private lateinit var floorsContainer: LinearLayout
-    private lateinit var tvCurrentFloor: TextView
-    private lateinit var tvLoadStatus: TextView
+    private lateinit var tvCurrentFloors: TextView
+    private lateinit var tvLoad: TextView
+
+    private lateinit var floorLabels: LinearLayout
 
     private lateinit var shaft1: FrameLayout
     private lateinit var shaft2: FrameLayout
     private lateinit var shaft3: FrameLayout
 
-    private val floorPositions = mutableListOf<Float>()
-    private var floorCount = 5
-
-    private var pollJob: Job? = null
-    private val currentFloorIndices = intArrayOf(0, 0, 0)
-
-    private val api by lazy {
-        SimApi.create("http://10.0.2.2:8080/")
-    }
+    private lateinit var elevator1: TextView
+    private lateinit var elevator2: TextView
+    private lateinit var elevator3: TextView
 
     private val floorHeightDp = 80f
+    private var floorCount = 5
+
+    private var pollingJob: Job? = null
+    private var initializedLayout = false
+
+    private val shafts by lazy { listOf(shaft1, shaft2, shaft3) }
+    private val elevators by lazy { listOf(elevator1, elevator2, elevator3) }
+
+    // ---------- Smooth interpolation state ----------
+    private data class MoveTrack(
+        var isMoving: Boolean = false,
+        var startFloor: Int = 1,
+        var targetFloor: Int = 1,
+        var totalTripMs: Long = 0L,
+        var remainingMsReported: Long = 0L,
+        var lastServerUpdateMs: Long = 0L
+    )
+
+    private val tracks = arrayOf(MoveTrack(), MoveTrack(), MoveTrack())
+    private var latestStates: List<ElevatorState> = emptyList()
+
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val frameRunnable = object : Runnable {
+        override fun run() {
+            renderFrame()
+            uiHandler.postDelayed(this, 16L) // ~60fps
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_visual_simulation)
 
-        // UI refs
-        elevator1 = findViewById(R.id.elevator1)
-        elevator2 = findViewById(R.id.elevator2)
-        elevator3 = findViewById(R.id.elevator3)
-
         tvBuilding = findViewById(R.id.tvBuilding)
-        floorsContainer = findViewById(R.id.floorsContainer)
-        tvCurrentFloor = findViewById(R.id.tvCurrentFloor)
-        tvLoadStatus = findViewById(R.id.tvLoadStatus)
+        tvCurrentFloors = findViewById(R.id.tvCurrentFloors)
+        tvLoad = findViewById(R.id.tvLoad)
+
+        floorLabels = findViewById(R.id.floorLabels)
 
         shaft1 = findViewById(R.id.shaftContainer1)
         shaft2 = findViewById(R.id.shaftContainer2)
         shaft3 = findViewById(R.id.shaftContainer3)
 
-        val btnStats = findViewById<Button>(R.id.btnStats)
+        elevator1 = findViewById(R.id.elevator1)
+        elevator2 = findViewById(R.id.elevator2)
+        elevator3 = findViewById(R.id.elevator3)
 
-        // Get mode + floors from Login
-        floorCount = intent.getIntExtra("floorCount", 5)
-        val mode = intent.getStringExtra("mode") ?: "simulation"
-        tvBuilding.text = if (mode == "simulation") {
-            "Simulation Mode — $floorCount Floors"
-        } else {
-            "Prototype Mode — $floorCount Floors"
-        }
-
-        // Build floors + shafts once layout is ready
-        shaft1.post {
-            val height = floorCount * dpToPx(floorHeightDp)
-            buildFloorLabels(height)
-            buildTicks(height)
-            computeFloorPositions()
-        }
-
-        btnStats.setOnClickListener {
+        findViewById<Button>(R.id.btnStats).setOnClickListener {
             startActivity(Intent(this, StatisticsActivity::class.java))
+        }
+
+        startPolling()
+        uiHandler.post(frameRunnable)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        pollingJob?.cancel()
+        uiHandler.removeCallbacks(frameRunnable)
+    }
+
+    // ---------- Poll server slower; render loop handles smoothness ----------
+    private fun startPolling() {
+        pollingJob = lifecycleScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    val state = SimApi.api.getState()
+                    val nowMs = SystemClock.elapsedRealtime()
+
+                    withContext(Dispatchers.Main) {
+                        if (!initializedLayout || state.floorCount != floorCount) {
+                            floorCount = state.floorCount
+                            buildFloorLabels()
+                            buildTicksAndResizeShafts()
+                            initializedLayout = true
+                        }
+
+                        latestStates = state.elevators
+                        updateTopLabels(latestStates)
+
+                        // Update movement tracks from server truth
+                        latestStates.forEachIndexed { idx, e ->
+                            if (idx >= tracks.size) return@forEachIndexed
+                            updateTrackFromServer(idx, e, nowMs)
+                        }
+                    }
+                } catch (_: Exception) {
+                    // ignore transient errors
+                }
+
+                delay(750) // polling period; smoothness comes from render loop
+            }
         }
     }
 
-    // -------- Floor labels --------
-    private fun buildFloorLabels(height: Float) {
-        floorsContainer.removeAllViews()
-        floorsContainer.layoutParams.height = height.toInt()
+    private fun updateTrackFromServer(i: Int, e: ElevatorState, nowMs: Long) {
+        val t = tracks[i]
 
-        for (i in floorCount downTo 1) {
+        when (e.state) {
+            "Moving" -> {
+                // If newly entered moving or target changed, reset track
+                val startingNewTrip = !t.isMoving || t.targetFloor != e.targetFloor
+
+                if (startingNewTrip) {
+                    t.isMoving = true
+                    t.startFloor = e.currentFloor
+                    t.targetFloor = e.targetFloor
+                    t.totalTripMs = e.remainingMs
+                    t.remainingMsReported = e.remainingMs
+                    t.lastServerUpdateMs = nowMs
+                } else {
+                    // continuing same trip: just refresh remainingMs/time anchor
+                    t.remainingMsReported = e.remainingMs
+                    t.lastServerUpdateMs = nowMs
+
+                    // If server says remaining grew (rare), treat as new trip
+                    if (e.remainingMs > t.totalTripMs) {
+                        t.totalTripMs = e.remainingMs
+                    }
+                }
+            }
+
+            "DoorOpen", "Idle" -> {
+                // Not moving -> snap to floor and clear track
+                t.isMoving = false
+                t.startFloor = e.currentFloor
+                t.targetFloor = e.currentFloor
+                t.totalTripMs = 0
+                t.remainingMsReported = 0
+                t.lastServerUpdateMs = nowMs
+
+                // ensure exact placement:
+                val y = floorToY(e.currentFloor)
+                elevators[i].translationY = y
+            }
+        }
+    }
+
+    // ---------- 60fps render ----------
+    private fun renderFrame() {
+        if (!initializedLayout || latestStates.isEmpty()) return
+
+        val nowMs = SystemClock.elapsedRealtime()
+
+        latestStates.forEachIndexed { idx, e ->
+            if (idx >= elevators.size) return@forEachIndexed
+            val view = elevators[idx]
+            val t = tracks[idx]
+
+            if (t.isMoving && t.totalTripMs > 0) {
+                val elapsedSinceServer = nowMs - t.lastServerUpdateMs
+                val estRemaining = (t.remainingMsReported - elapsedSinceServer).coerceAtLeast(0)
+
+                val progress =
+                    1f - (estRemaining.toFloat() / t.totalTripMs.toFloat()).coerceIn(0f, 1f)
+
+                val startY = floorToY(t.startFloor)
+                val targetY = floorToY(t.targetFloor)
+
+                val y = lerp(startY, targetY, progress)
+                view.translationY = y
+            } else {
+                // not moving: keep snapped
+                view.translationY = floorToY(e.currentFloor)
+            }
+        }
+    }
+
+    // ---------- Layout builders ----------
+    private fun buildFloorLabels() {
+        floorLabels.removeAllViews()
+
+        for (f in floorCount downTo 1) {
             val label = TextView(this)
-            label.text = "Floor $i"
+            label.text = "Floor $f"
             label.textSize = 16f
             label.gravity = Gravity.CENTER_VERTICAL
             label.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 dpToPx(floorHeightDp).toInt()
             )
-            floorsContainer.addView(label)
+            floorLabels.addView(label)
         }
+
+        floorLabels.layoutParams.height = dpToPx(floorHeightDp * floorCount).toInt()
     }
 
-    // -------- Tick marks + elevator placement --------
-    private fun buildTicks(height: Float) {
-        val shafts = listOf(
-            shaft1 to elevator1,
-            shaft2 to elevator2,
-            shaft3 to elevator3
-        )
+    private fun buildTicksAndResizeShafts() {
+        val shaftHeightPx = dpToPx(floorHeightDp * floorCount)
 
-        for ((shaft, car) in shafts) {
+        shafts.forEachIndexed { idx, shaft ->
             shaft.removeAllViews()
-            shaft.layoutParams.height = height.toInt()
 
-            // horizontal ticks for each floor
+            val lp = shaft.layoutParams
+            lp.height = shaftHeightPx.toInt()
+            shaft.layoutParams = lp
+
             for (i in 0 until floorCount) {
                 val tick = View(this)
                 tick.setBackgroundColor(Color.DKGRAY)
@@ -124,133 +235,42 @@ class VisualSimulationActivity : AppCompatActivity() {
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     dpToPx(2f).toInt()
                 )
-                tick.y = height - dpToPx(floorHeightDp) * (i + 1)
+                val y = shaftHeightPx - dpToPx(floorHeightDp) * (i + 1)
+                tick.y = y
                 shaft.addView(tick, params)
             }
 
-            // add the elevator
-            shaft.addView(car)
+            shaft.addView(elevators[idx])
         }
     }
 
-    // -------- Precompute Y positions per floor --------
-    private fun computeFloorPositions() {
-        floorPositions.clear()
+    private fun updateTopLabels(eStates: List<ElevatorState>) {
+        val e1 = eStates.getOrNull(0)
+        val e2 = eStates.getOrNull(1)
+        val e3 = eStates.getOrNull(2)
 
-        val totalHeight = (floorCount - 1) * dpToPx(floorHeightDp)
-        for (i in 0 until floorCount) {
-            val y = totalHeight - i * dpToPx(floorHeightDp)
-            floorPositions.add(y)
-        }
+        tvBuilding.text = "Simulation Mode — $floorCount Floors"
 
-        elevator1.translationY = floorPositions[0]
-        elevator2.translationY = floorPositions[0]
-        elevator3.translationY = floorPositions[0]
+        tvCurrentFloors.text =
+            "Current Floors →  E1: ${e1?.currentFloor ?: "-"} | " +
+                    "E2: ${e2?.currentFloor ?: "-"} | " +
+                    "E3: ${e3?.currentFloor ?: "-"}"
 
-        currentFloorIndices.fill(0)
-        updateCurrentFloorLabel()
+        tvLoad.text =
+            "Load: E1 ${e1?.load ?: 0}/${e1?.capacity ?: 10}  |  " +
+                    "E2 ${e2?.load ?: 0}/${e2?.capacity ?: 10}  |  " +
+                    "E3 ${e3?.load ?: 0}/${e3?.capacity ?: 10}"
     }
 
-    // -------- Animate an elevator to a floor index --------
-    private fun moveElevatorToFloor(view: TextView, index: Int, targetIndex: Int) {
-        val current = currentFloorIndices[index]
-        if (current == targetIndex) return
-
-        val floorsToMove = abs(targetIndex - current)
-
-        // same timing logic we used before
-        val duration = when (floorsToMove) {
-            1 -> 7500L
-            else -> 7500L + (floorsToMove - 2) * 7000L + 7500L
-        }
-
-        val anim = ObjectAnimator.ofFloat(
-            view,
-            "translationY",
-            floorPositions[current],
-            floorPositions[targetIndex]
-        )
-        anim.duration = duration
-        anim.start()
-
-        currentFloorIndices[index] = targetIndex
-        updateCurrentFloorLabel()
-        flashElevator(view)
+    // ---------- Helpers ----------
+    private fun floorToY(floor: Int): Float {
+        val capped = max(1, min(floorCount, floor))
+        return dpToPx(floorHeightDp * (floorCount - capped))
     }
 
-    private fun flashElevator(view: TextView) {
-        val flash = ObjectAnimator.ofInt(
-            view,
-            "backgroundColor",
-            Color.parseColor("#555555"),
-            Color.parseColor("#AAAAAA"),
-            Color.parseColor("#555555")
-        )
-        flash.duration = 600
-        flash.setEvaluator(ArgbEvaluator())
-        flash.start()
-    }
-
-    private fun View.isAnimating(): Boolean = this.animation != null
-
-    // -------- Poll simulation server --------
-    override fun onStart() {
-        super.onStart()
-
-        pollJob = lifecycleScope.launch {
-            while (isActive) {
-                try {
-                    val state = withContext(Dispatchers.IO) { api.getState() }
-                    val elevators = state.elevators
-
-                    // map floors to indices (0 = bottom)
-                    elevators.getOrNull(0)?.let {
-                        val idx = (floorCount - it.currentFloor).coerceIn(0, floorCount - 1)
-                        if (!elevator1.isAnimating()) moveElevatorToFloor(elevator1, 0, idx)
-                    }
-
-                    elevators.getOrNull(1)?.let {
-                        val idx = (floorCount - it.currentFloor).coerceIn(0, floorCount - 1)
-                        if (!elevator2.isAnimating()) moveElevatorToFloor(elevator2, 1, idx)
-                    }
-
-                    elevators.getOrNull(2)?.let {
-                        val idx = (floorCount - it.currentFloor).coerceIn(0, floorCount - 1)
-                        if (!elevator3.isAnimating()) moveElevatorToFloor(elevator3, 2, idx)
-                    }
-
-                    // load display
-                    val e1 = elevators.getOrNull(0)
-                    val e2 = elevators.getOrNull(1)
-                    val e3 = elevators.getOrNull(2)
-
-                    tvLoadStatus.text =
-                        "Load:  E1 ${e1?.load ?: 0}/${e1?.capacity ?: 10}   |   " +
-                                "E2 ${e2?.load ?: 0}/${e2?.capacity ?: 10}   |   " +
-                                "E3 ${e3?.load ?: 0}/${e3?.capacity ?: 10}"
-
-                } catch (_: Exception) {
-                    // ignore for now to keep UI simple
-                }
-
-                delay(1000)
-            }
-        }
-    }
-
-    override fun onStop() {
-        super.onStop()
-        pollJob?.cancel()
-    }
-
-    private fun updateCurrentFloorLabel() {
-        val e1 = floorCount - currentFloorIndices[0]
-        val e2 = floorCount - currentFloorIndices[1]
-        val e3 = floorCount - currentFloorIndices[2]
-        tvCurrentFloor.text = "Current Floors →  E1: $e1 | E2: $e2 | E3: $3"
-    }
+    private fun lerp(a: Float, b: Float, t: Float): Float =
+        a + (b - a) * t
 
     private fun dpToPx(dp: Float): Float =
         dp * resources.displayMetrics.density
 }
-

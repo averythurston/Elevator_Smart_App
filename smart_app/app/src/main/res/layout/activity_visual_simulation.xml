@@ -1,75 +1,77 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:padding="16dp">
 
     <LinearLayout
         android:orientation="vertical"
-        android:padding="16dp"
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
-        <!-- Title / Mode / Floors -->
+        <!-- Title -->
         <TextView
             android:id="@+id/tvBuilding"
-            android:text="Simulation Mode — 5 Floors"
-            android:textSize="20sp"
+            android:text="Simulation Mode"
+            android:textSize="22sp"
             android:textStyle="bold"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="4dp" />
+            android:layout_marginBottom="8dp" />
 
-        <!-- Current floor summary -->
+        <!-- Current Floors -->
         <TextView
-            android:id="@+id/tvCurrentFloor"
-            android:text="Current Floors →  E1: 1 | E2: 1 | E3: 1"
+            android:id="@+id/tvCurrentFloors"
+            android:text="Current Floors → E1: 1 | E2: 1 | E3: 1"
             android:textSize="16sp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="4dp" />
 
-        <!-- Load summary -->
+        <!-- Load -->
         <TextView
-            android:id="@+id/tvLoadStatus"
+            android:id="@+id/tvLoad"
             android:text="Load: E1 0/10 | E2 0/10 | E3 0/10"
             android:textSize="16sp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="16dp" />
 
-        <!-- Main horizontal sim area -->
+        <!-- Floors left + 3 shafts right -->
         <LinearLayout
             android:orientation="horizontal"
-            android:gravity="top"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
+            android:layout_height="wrap_content"
+            android:gravity="top">
 
-            <!-- Floor labels -->
+            <!-- Floor labels (dynamic) -->
             <LinearLayout
-                android:id="@+id/floorsContainer"
+                android:id="@+id/floorLabels"
                 android:orientation="vertical"
-                android:gravity="center_vertical"
                 android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:layout_marginRight="32dp" />
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp" />
 
-            <!-- Shafts row -->
+            <!-- Shafts row takes remaining width -->
             <LinearLayout
+                android:id="@+id/shaftsRow"
                 android:orientation="horizontal"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content">
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1">
 
                 <!-- Shaft 1 -->
                 <FrameLayout
                     android:id="@+id/shaftContainer1"
-                    android:layout_width="100dp"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                    android:layout_weight="1"
                     android:background="#E0E0E0"
-                    android:layout_marginRight="16dp">
+                    android:layout_marginHorizontal="3dp">
 
                     <TextView
                         android:id="@+id/elevator1"
-                        android:layout_width="80dp"
+                        android:layout_width="70dp"
                         android:layout_height="80dp"
                         android:background="#555555"
                         android:layout_gravity="top|center_horizontal" />
@@ -78,14 +80,15 @@
                 <!-- Shaft 2 -->
                 <FrameLayout
                     android:id="@+id/shaftContainer2"
-                    android:layout_width="100dp"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                    android:layout_weight="1"
                     android:background="#E0E0E0"
-                    android:layout_marginRight="16dp">
+                    android:layout_marginHorizontal="3dp">
 
                     <TextView
                         android:id="@+id/elevator2"
-                        android:layout_width="80dp"
+                        android:layout_width="70dp"
                         android:layout_height="80dp"
                         android:background="#555555"
                         android:layout_gravity="top|center_horizontal" />
@@ -94,13 +97,15 @@
                 <!-- Shaft 3 -->
                 <FrameLayout
                     android:id="@+id/shaftContainer3"
-                    android:layout_width="100dp"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:background="#E0E0E0">
+                    android:layout_weight="1"
+                    android:background="#E0E0E0"
+                    android:layout_marginHorizontal="3dp">
 
                     <TextView
                         android:id="@+id/elevator3"
-                        android:layout_width="80dp"
+                        android:layout_width="70dp"
                         android:layout_height="80dp"
                         android:background="#555555"
                         android:layout_gravity="top|center_horizontal" />
@@ -109,13 +114,12 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Stats button -->
         <Button
             android:id="@+id/btnStats"
             android:text="View Statistics"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="24dp"
             android:layout_gravity="center_horizontal" />
 
     </LinearLayout>

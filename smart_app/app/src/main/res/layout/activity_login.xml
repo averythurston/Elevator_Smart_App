@@ -7,33 +7,32 @@
     android:layout_height="match_parent">
 
     <TextView
-        android:id="@+id/tvTitle"
         android:text="Smart Elevator App"
-        android:textSize="24sp"
+        android:textSize="26sp"
         android:textStyle="bold"
-        android:layout_marginBottom="24dp"
+        android:layout_marginBottom="28dp"
         android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
+        android:layout_height="wrap_content"/>
 
     <Button
         android:id="@+id/btnSimulation"
         android:text="Simulation Mode"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="12dp" />
+        android:layout_marginBottom="12dp"/>
 
     <Button
         android:id="@+id/btnPrototype"
         android:text="Prototype Mode"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
+        android:layout_height="wrap_content"/>
 
     <TextView
         android:id="@+id/tvStatus"
         android:text=""
         android:textSize="16sp"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="22dp"
         android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
-
+        android:layout_height="wrap_content"/>
 </LinearLayout>
+

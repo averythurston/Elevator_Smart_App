@@ -18,10 +18,14 @@ data class ElevatorState(
     val direction: Int,
     val doorOpen: Boolean,
     val load: Int,
-    val capacity: Int
+    val capacity: Int,
+
+    // ✅ NEW (from C++)
+    val state: String,
+    val remainingMs: Long
 )
 
-// ---------- STATS RESPONSE (/stats or /stats/daily) ----------
+// ---------- STATS RESPONSE (/stats/daily) ----------
 
 data class StatsResponse(
     val floorCount: Int,
@@ -61,15 +65,19 @@ interface SimService {
     suspend fun getStats(): StatsResponse
 }
 
-// ---------- FACTORY ----------
+// ---------- FACTORY + SINGLETON ----------
 
 object SimApi {
-    fun create(baseUrl: String): SimService {
+    private const val BASE_URL = "http://10.0.2.2:8080/"
+
+    fun create(baseUrl: String = BASE_URL): SimService {
         val retrofit = Retrofit.Builder()
-            .baseUrl(baseUrl) // must end with '/'
+            .baseUrl(baseUrl)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
 
         return retrofit.create(SimService::class.java)
     }
+
+    val api: SimService by lazy { create(BASE_URL) }
 }
