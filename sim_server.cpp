@@ -9,11 +9,16 @@
 //   GET /stats/daily
 //
 // IMPORTANT FLOOR FIX:
-// Internally the sim logic is unchanged (it was working),
-// BUT floors are now *served* as: 1 = bottom, gFloors = top.
+// Floors are *served* as: 1 = bottom, gFloors = top.
 // We convert on output:
 //   publicFloor = gFloors - internalFloor + 1
 //   publicDirection = -internalDirection
+//
+// MOVEMENT FIX:
+// /state now also serves:
+//   "state": "Idle" | "Moving" | "DoorOpen"
+//   "remainingMs": milliseconds until next state transition
+// so the Android app can animate smoothly (no teleporting).
 
 #include <iostream>
 #include <thread>
@@ -121,14 +126,10 @@ bool should_spawn(double ratePerSec) {
 }
 
 // -------- FLOOR OUTPUT CONVERSION HELPERS --------
-// Convert internal floor to public floor shown to app.
-// Public: 1 = bottom, gFloors = top.
 int toPublicFloor(int internalFloor) {
     return gFloors - internalFloor + 1;
 }
 
-// Convert internal direction to public direction.
-// If we flip floors, direction sign flips too.
 int toPublicDirection(int internalDir) {
     return -internalDir;
 }
@@ -165,15 +166,10 @@ void generate_traffic() {
     }
 }
 
-// ---------------------------------------------------------
-// INTERNAL TARGET SELECTION (unchanged)
-// ---------------------------------------------------------
 int choose_next_target(const Elevator& e) {
-    // If passengers onboard, go to their earliest destination
     if (!e.onboard.empty())
         return e.onboard.front().destFloor;
 
-    // Otherwise pick nearest floor with waiting passengers
     int best = e.currentFloor;
     int bestDist = 999;
 
@@ -188,13 +184,9 @@ int choose_next_target(const Elevator& e) {
     return best;
 }
 
-// ---------------------------------------------------------
-// UPDATE ELEVATOR STATE MACHINE (internal logic unchanged)
-// ---------------------------------------------------------
 void update_elevator(Elevator& e, TimePoint now) {
     using namespace std::chrono;
 
-    // -------- IDLE --------
     if (e.state == ElevatorState::Idle) {
         if (now >= e.stateEndTime) {
 
@@ -216,7 +208,6 @@ void update_elevator(Elevator& e, TimePoint now) {
             double tSec = travel_time_sec(floors);
             e.stateEndTime = now + duration_cast<Clock::duration>(duration<double>(tSec));
 
-            // Trip stats
             gStats.totalTrips++;
             gStats.completedTrips++;
             gStats.totalTripSec += tSec;
@@ -227,7 +218,6 @@ void update_elevator(Elevator& e, TimePoint now) {
         }
     }
 
-    // -------- MOVING --------
     else if (e.state == ElevatorState::Moving) {
         if (now >= e.stateEndTime) {
 
@@ -241,17 +231,15 @@ void update_elevator(Elevator& e, TimePoint now) {
             e.energyKWh += energy;
             gHourly[fake_hour()].energyKWh += energy;
 
-            // Arrive at floor
             e.currentFloor = e.targetFloor;
             e.direction = 0;
             e.doorOpen = true;
             e.state = ElevatorState::DoorOpen;
-            e.stateEndTime = now + seconds(5);  // door timing
+            e.stateEndTime = now + seconds(5);
 
             e.stopCount++;
             e.doorOpenCount++;
 
-            // OFFLOAD passengers
             auto it = e.onboard.begin();
             while (it != e.onboard.end()) {
                 if (it->destFloor == e.currentFloor) {
@@ -263,7 +251,6 @@ void update_elevator(Elevator& e, TimePoint now) {
                 }
             }
 
-            // LOAD queues
             int capLeft = e.capacity - (int)e.onboard.size();
             auto& U = upQ[e.currentFloor];
             auto& D = downQ[e.currentFloor];
@@ -290,7 +277,6 @@ void update_elevator(Elevator& e, TimePoint now) {
         }
     }
 
-    // -------- DOOR OPEN --------
     else if (e.state == ElevatorState::DoorOpen) {
         if (now >= e.stateEndTime) {
             e.doorOpen = false;
@@ -299,13 +285,13 @@ void update_elevator(Elevator& e, TimePoint now) {
         }
     }
 }
+
 void sim_loop() {
     while (true) {
         auto now = Clock::now();
         {
             std::lock_guard<std::mutex> lock(gMutex);
             generate_traffic();
-
             for (auto& e : gElevators)
                 update_elevator(e, now);
         }
@@ -313,12 +299,7 @@ void sim_loop() {
     }
 }
 
-// ------------------------------------------------------------------
-// FIXED /state JSON
-// NOW USES:
-//    publicFloor = gFloors - internalFloor + 1
-//    publicDir   = -internalDirection
-// ------------------------------------------------------------------
+// /state JSON WITH MOVEMENT FIELDS
 std::string state_json() {
     std::lock_guard<std::mutex> lock(gMutex);
     std::ostringstream out;
@@ -326,6 +307,8 @@ std::string state_json() {
     out << "{";
     out << "\"floorCount\":" << gFloors << ",";
     out << "\"elevators\":[";
+
+    auto now = Clock::now();
 
     for (size_t i = 0; i < gElevators.size(); ++i) {
         const auto& e = gElevators[i];
@@ -335,11 +318,37 @@ std::string state_json() {
         int publicTarget    = toPublicFloor(e.targetFloor);
         int publicDirection = toPublicDirection(e.direction);
 
+        std::string stateStr;
+        long remainingMs = 0;
+
+        if (e.state == ElevatorState::Moving) {
+            stateStr = "Moving";
+            remainingMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    e.stateEndTime - now
+                ).count();
+            if (remainingMs < 0) remainingMs = 0;
+        }
+        else if (e.state == ElevatorState::DoorOpen) {
+            stateStr = "DoorOpen";
+            remainingMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    e.stateEndTime - now
+                ).count();
+            if (remainingMs < 0) remainingMs = 0;
+        }
+        else {
+            stateStr = "Idle";
+            remainingMs = 0;
+        }
+
         out << "{"
             << "\"id\":" << e.id
             << ",\"currentFloor\":" << publicFloor
             << ",\"targetFloor\":" << publicTarget
             << ",\"direction\":" << publicDirection
+            << ",\"state\":\"" << stateStr << "\""
+            << ",\"remainingMs\":" << remainingMs
             << ",\"doorOpen\":" << (e.doorOpen ? "true" : "false")
             << ",\"load\":" << e.onboard.size()
             << ",\"capacity\":" << e.capacity
@@ -349,10 +358,8 @@ std::string state_json() {
     out << "]}";
     return out.str();
 }
-// ------------------------------------------------------------------
-// /stats/daily JSON
-// Stats DO NOT need floor flipping because they don't expose floors.
-// ------------------------------------------------------------------
+
+// /stats/daily JSON unchanged
 std::string stats_json() {
     std::lock_guard<std::mutex> lock(gMutex);
 
@@ -388,7 +395,6 @@ std::string stats_json() {
     out << "\"avgEnergyKWh\":" << avgEnergy << ",";
     out << "\"peakHour\":" << peakHour << ",";
 
-    // Per-elevator stats
     out << "\"elevators\":[";
     for (size_t i = 0; i < gElevators.size(); ++i) {
         const auto& e = gElevators[i];
@@ -404,7 +410,6 @@ std::string stats_json() {
     }
     out << "],";
 
-    // Hourly stats
     out << "\"hourly\":[";
     for (int h = 0; h < 24; ++h) {
         if (h) out << ",";
@@ -425,9 +430,6 @@ std::string stats_json() {
     return out.str();
 }
 
-// ------------------------------------------------------------------
-// HTTP utilities
-// ------------------------------------------------------------------
 std::string http_ok(const std::string& body) {
     std::ostringstream out;
     out << "HTTP/1.1 200 OK\r\n"
@@ -438,9 +440,6 @@ std::string http_ok(const std::string& body) {
     return out.str();
 }
 
-// ------------------------------------------------------------------
-// Client handler
-// ------------------------------------------------------------------
 void handle_client(SOCKET c) {
     char buf[4096];
     int n = recv(c, buf, sizeof(buf) - 1, 0);
@@ -462,9 +461,6 @@ void handle_client(SOCKET c) {
     closesocket(c);
 }
 
-// ------------------------------------------------------------------
-// MAIN — Corrected initialization for floor 1 = bottom
-// ------------------------------------------------------------------
 int main() {
     WSADATA w;
     if (WSAStartup(MAKEWORD(2,2), &w) != 0) {
@@ -476,25 +472,19 @@ int main() {
         std::lock_guard<std::mutex> lock(gMutex);
         gFloors = 5;
 
-        // Queues for each floor
         upQ.assign(gFloors + 1, {});
         downQ.assign(gFloors + 1, {});
 
-        // Elevators start at floors:
-        // E1 → floor 1 (bottom)
-        // E2 → floor 3 (middle)
-        // E3 → floor 5 (top)
-        // Matching natural building layout
         std::vector<int> startFloors = {
-            1, 
-            (gFloors + 1) / 2, 
+            1,
+            (gFloors + 1) / 2,
             gFloors
         };
 
         for (int i = 0; i < 3; ++i) {
             Elevator e;
             e.id = i + 1;
-            e.currentFloor = startFloors[i];  // INTERNAL FLOOR = REAL FLOOR
+            e.currentFloor = startFloors[i];  // INTERNAL FLOOR
             e.targetFloor = e.currentFloor;
 
             e.direction = 0;

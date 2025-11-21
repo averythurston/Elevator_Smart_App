@@ -20,7 +20,6 @@ data class ElevatorState(
     val load: Int,
     val capacity: Int,
 
-    // ✅ NEW (from C++)
     val state: String,
     val remainingMs: Long
 )

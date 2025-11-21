@@ -13,6 +13,7 @@ import com.example.smart_app.data.SimApi
 import kotlinx.coroutines.*
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.abs
 
 class VisualSimulationActivity : AppCompatActivity() {
 
@@ -111,19 +112,23 @@ class VisualSimulationActivity : AppCompatActivity() {
                         latestStates = state.elevators
                         updateTopLabels(latestStates)
 
-                        // Update movement tracks from server truth
                         latestStates.forEachIndexed { idx, e ->
                             if (idx >= tracks.size) return@forEachIndexed
                             updateTrackFromServer(idx, e, nowMs)
                         }
                     }
-                } catch (_: Exception) {
-                    // ignore transient errors
-                }
+                } catch (_: Exception) { }
 
-                delay(750) // polling period; smoothness comes from render loop
+                delay(750)
             }
         }
+    }
+
+    // Matches C++ travel_time_sec()
+    private fun travelTimeMs(floorsMoved: Int): Long {
+        val sec = if (floorsMoved <= 1) 7.5
+        else 7.5 + 7.5 + 7.0 * (floorsMoved - 2)
+        return (sec * 1000).toLong()
     }
 
     private fun updateTrackFromServer(i: Int, e: ElevatorState, nowMs: Long) {
@@ -131,30 +136,31 @@ class VisualSimulationActivity : AppCompatActivity() {
 
         when (e.state) {
             "Moving" -> {
-                // If newly entered moving or target changed, reset track
+                val floorsMoved = abs(e.targetFloor - e.currentFloor)
+                val computedTotal = travelTimeMs(floorsMoved)
+
                 val startingNewTrip = !t.isMoving || t.targetFloor != e.targetFloor
 
                 if (startingNewTrip) {
                     t.isMoving = true
                     t.startFloor = e.currentFloor
                     t.targetFloor = e.targetFloor
-                    t.totalTripMs = e.remainingMs
+
+                    // Use computed total (server model) for consistent speed
+                    t.totalTripMs = max(computedTotal, e.remainingMs)
                     t.remainingMsReported = e.remainingMs
                     t.lastServerUpdateMs = nowMs
                 } else {
-                    // continuing same trip: just refresh remainingMs/time anchor
                     t.remainingMsReported = e.remainingMs
                     t.lastServerUpdateMs = nowMs
 
-                    // If server says remaining grew (rare), treat as new trip
-                    if (e.remainingMs > t.totalTripMs) {
-                        t.totalTripMs = e.remainingMs
+                    if (computedTotal > t.totalTripMs) {
+                        t.totalTripMs = computedTotal
                     }
                 }
             }
 
             "DoorOpen", "Idle" -> {
-                // Not moving -> snap to floor and clear track
                 t.isMoving = false
                 t.startFloor = e.currentFloor
                 t.targetFloor = e.currentFloor
@@ -162,14 +168,17 @@ class VisualSimulationActivity : AppCompatActivity() {
                 t.remainingMsReported = 0
                 t.lastServerUpdateMs = nowMs
 
-                // ensure exact placement:
-                val y = floorToY(e.currentFloor)
-                elevators[i].translationY = y
+                elevators[i].translationY = floorToY(e.currentFloor)
+            }
+
+            else -> {
+                // fail-safe: treat unknown as idle
+                t.isMoving = false
+                elevators[i].translationY = floorToY(e.currentFloor)
             }
         }
     }
 
-    // ---------- 60fps render ----------
     private fun renderFrame() {
         if (!initializedLayout || latestStates.isEmpty()) return
 
@@ -190,16 +199,13 @@ class VisualSimulationActivity : AppCompatActivity() {
                 val startY = floorToY(t.startFloor)
                 val targetY = floorToY(t.targetFloor)
 
-                val y = lerp(startY, targetY, progress)
-                view.translationY = y
+                view.translationY = lerp(startY, targetY, progress)
             } else {
-                // not moving: keep snapped
                 view.translationY = floorToY(e.currentFloor)
             }
         }
     }
 
-    // ---------- Layout builders ----------
     private fun buildFloorLabels() {
         floorLabels.removeAllViews()
 
@@ -262,7 +268,6 @@ class VisualSimulationActivity : AppCompatActivity() {
                     "E3 ${e3?.load ?: 0}/${e3?.capacity ?: 10}"
     }
 
-    // ---------- Helpers ----------
     private fun floorToY(floor: Int): Float {
         val capped = max(1, min(floorCount, floor))
         return dpToPx(floorHeightDp * (floorCount - capped))
