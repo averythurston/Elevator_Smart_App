@@ -1,56 +1,39 @@
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="24dp"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:padding="24dp">
+    android:layout_height="match_parent">
 
-    <LinearLayout
-        android:orientation="vertical"
-        android:gravity="center"
+    <TextView
+        android:id="@+id/tvTitle"
+        android:text="Smart Elevator App"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="24dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
+
+    <Button
+        android:id="@+id/btnSimulation"
+        android:text="Simulation Mode"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp" />
 
-        <TextView
-            android:text="Building Monitor Login"
-            android:textSize="22sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="24dp"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content" />
+    <Button
+        android:id="@+id/btnPrototype"
+        android:text="Prototype Mode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
 
-        <EditText
-            android:id="@+id/etUsername"
-            android:hint="Username"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
+    <TextView
+        android:id="@+id/tvStatus"
+        android:text=""
+        android:textSize="16sp"
+        android:layout_marginTop="24dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
 
-        <EditText
-            android:id="@+id/etPassword"
-            android:hint="Password"
-            android:inputType="textPassword"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"/>
-
-        <Spinner
-            android:id="@+id/spinnerBuilding"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp" />
-
-        <Button
-            android:id="@+id/btnLogin"
-            android:text="Access Building"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"/>
-
-        <Button
-            android:id="@+id/btnGuest"
-            android:text="Guest Entrance"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:backgroundTint="#888888"/>
-
-    </LinearLayout>
-</ScrollView>
+</LinearLayout>

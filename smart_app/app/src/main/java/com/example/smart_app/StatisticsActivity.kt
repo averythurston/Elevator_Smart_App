@@ -4,103 +4,106 @@ import android.graphics.Color
 import android.os.Bundle
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import com.github.mikephil.charting.charts.BarChart
+import androidx.lifecycle.lifecycleScope
+import com.example.smart_app.data.*
 import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.components.Description
-import com.github.mikephil.charting.data.*
-import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
+import com.github.mikephil.charting.components.XAxis
+import com.github.mikephil.charting.data.Entry
+import com.github.mikephil.charting.data.LineData
+import com.github.mikephil.charting.data.LineDataSet
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class StatisticsActivity : AppCompatActivity() {
+
+    private val api by lazy {
+        SimApi.create("http://10.0.2.2:8080/")
+    }
+
+    private lateinit var chartTrips: LineChart
+    private lateinit var tvSummary: TextView
+    private lateinit var tvElevatorBreakdown: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_statistics)
 
-        // --- Get references to views ---
-        val barChart = findViewById<BarChart>(R.id.barChart)
-        val tvTotalTrips = findViewById<TextView>(R.id.tvTotalTrips)
-        val tvAvgWait = findViewById<TextView>(R.id.tvAvgWait)
-        val tvUptime = findViewById<TextView>(R.id.tvUptime)
-        val tvEnergy = findViewById<TextView>(R.id.tvEnergy)
-        val tvSummary = findViewById<TextView>(R.id.tvSummary)
+        chartTrips = findViewById(R.id.chartTrips)
+        tvSummary = findViewById(R.id.tvSummary)
+        tvElevatorBreakdown = findViewById(R.id.tvElevatorBreakdown)
 
-        // Optional line chart (if you added it in XML)
-        val lineChart = try {
-            findViewById<LineChart>(R.id.lineChart)
-        } catch (e: Exception) {
-            null
-        }
+        loadStats()
+    }
 
-        // --- Simulated data: Elevator trips by time of day ---
-        val timeSlots = listOf("6-9AM", "9-12PM", "12-3PM", "3-6PM", "6-9PM", "9-12AM")
-        val tripsPerSlot = listOf(40f, 70f, 55f, 80f, 35f, 20f)
-
-        // --- Calculated metrics ---
-        val totalTrips = tripsPerSlot.sum().toInt()
-        val peakIndex = tripsPerSlot.indexOf(tripsPerSlot.maxOrNull()!!)
-        val peakTime = timeSlots[peakIndex]
-        val avgWaitTime = 9.2 // seconds
-        val uptime = 99.4 // percent
-        val avgEnergy = 11.7 // kWh
-
-        // --- Update summary fields ---
-        tvTotalTrips.text = "$totalTrips"
-        tvAvgWait.text = "${avgWaitTime}s"
-        tvUptime.text = "$uptime%"
-        tvEnergy.text = "$avgEnergy"
-        tvSummary.text =
-            "Summary: $totalTrips total trips today. Peak activity during $peakTime. Uptime $uptime%."
-
-        // --- Build bar chart (Trips per Time of Day) ---
-        val barEntries = tripsPerSlot.mapIndexed { index, value ->
-            BarEntry(index.toFloat(), value)
-        }
-
-        val barDataSet = BarDataSet(barEntries, "Trips per Time of Day")
-        barDataSet.color = Color.parseColor("#4CAF50")
-        barDataSet.valueTextColor = Color.BLACK
-        barDataSet.valueTextSize = 12f
-
-        val barData = BarData(barDataSet)
-        barChart.data = barData
-
-        barChart.setFitBars(true)
-        barChart.setDrawGridBackground(false)
-        barChart.axisRight.isEnabled = false
-        barChart.axisLeft.textColor = Color.DKGRAY
-        barChart.xAxis.valueFormatter = IndexAxisValueFormatter(timeSlots)
-        barChart.xAxis.textColor = Color.DKGRAY
-        barChart.xAxis.granularity = 1f
-        barChart.xAxis.labelRotationAngle = -30f
-        barChart.legend.textColor = Color.BLACK
-        barChart.description = Description().apply { text = "" }
-        barChart.animateY(1200)
-        barChart.invalidate()
-
-        // --- Optional: Line Chart (Daily Trend) ---
-        lineChart?.let {
-            val lineEntries = tripsPerSlot.mapIndexed { index, value ->
-                Entry(index.toFloat(), value)
+    private fun loadStats() {
+        lifecycleScope.launch {
+            try {
+                val stats = withContext(Dispatchers.IO) { api.getStats() }
+                bindSummary(stats)
+                bindElevatorBreakdown(stats.elevators)
+                setupTripsChart(stats.hourly)
+            } catch (e: Exception) {
+                tvSummary.text = "Failed to load statistics from simulation."
             }
-
-            val lineDataSet = LineDataSet(lineEntries, "Hourly Usage Trend")
-            lineDataSet.color = Color.parseColor("#2196F3")
-            lineDataSet.circleRadius = 4f
-            lineDataSet.setCircleColor(Color.parseColor("#2196F3"))
-            lineDataSet.valueTextColor = Color.BLACK
-            lineDataSet.lineWidth = 2f
-
-            val lineData = LineData(lineDataSet)
-            it.data = lineData
-
-            it.xAxis.valueFormatter = IndexAxisValueFormatter(timeSlots)
-            it.xAxis.labelRotationAngle = -30f
-            it.axisRight.isEnabled = false
-            it.axisLeft.textColor = Color.DKGRAY
-            it.legend.textColor = Color.BLACK
-            it.description = Description().apply { text = "" }
-            it.animateY(1200)
-            it.invalidate()
         }
+    }
+
+    private fun bindSummary(s: StatsResponse) {
+        val avgWait = String.format("%.2f", s.avgWaitSec)
+        val avgTrip = String.format("%.2f", s.avgTripSec)
+        val avgEnergy = String.format("%.3f", s.avgEnergyKWh)
+
+        tvSummary.text = """
+            Floors: ${s.floorCount}
+            Total Trips: ${s.totalTrips}
+            Total Passengers (spawned): ${s.totalPassengers}
+            Peak Hour: ${s.peakHour}:00
+            Avg Wait: $avgWait s
+            Avg Trip Time: $avgTrip s
+            Avg Energy / Trip: $avgEnergy kWh
+        """.trimIndent()
+    }
+
+    private fun bindElevatorBreakdown(elevators: List<ElevatorStats>) {
+        val builder = StringBuilder()
+        for (e in elevators) {
+            val energy = String.format("%.3f", e.energyKWh)
+            builder.append(
+                "Elevator ${e.id} → " +
+                        "Trips=${e.trips}, " +
+                        "Passengers=${e.passengersMoved}, " +
+                        "Stops=${e.stopCount}, " +
+                        "Door Opens=${e.doorOpenCount}, " +
+                        "Energy=${energy} kWh\n"
+            )
+        }
+        tvElevatorBreakdown.text = builder.toString()
+    }
+
+    private fun setupTripsChart(hourly: List<HourlyStats>) {
+        val entries = hourly.map {
+            Entry(it.hour.toFloat(), it.trips.toFloat())
+        }
+
+        val dataSet = LineDataSet(entries, "Trips per Hour").apply {
+            lineWidth = 2f
+            setDrawCircles(true)
+            setCircleColor(Color.BLUE)
+            color = Color.BLUE
+            valueTextSize = 10f
+        }
+
+        chartTrips.data = LineData(dataSet)
+
+        chartTrips.xAxis.apply {
+            position = XAxis.XAxisPosition.BOTTOM
+            granularity = 1f
+            labelCount = 6
+        }
+
+        chartTrips.axisRight.isEnabled = false
+        chartTrips.description.isEnabled = false
+        chartTrips.invalidate()
     }
 }
