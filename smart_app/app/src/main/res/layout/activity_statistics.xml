@@ -58,7 +58,53 @@
                 android:layout_height="wrap_content"/>
         </LinearLayout>
 
-        <!-- Chart Card -->
+        <!-- B) Elevator Utilization -->
+        <LinearLayout
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:background="#F6F6F6"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp">
+
+            <TextView
+                android:text="Elevator Utilization (Trips per Elevator)"
+                android:textStyle="bold"
+                android:textSize="18sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"/>
+
+            <com.github.mikephil.charting.charts.BarChart
+                android:id="@+id/chartUtilization"
+                android:layout_width="match_parent"
+                android:layout_height="260dp"/>
+        </LinearLayout>
+
+        <!-- A) Avg Wait Time per Hour -->
+        <LinearLayout
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:background="#F6F6F6"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp">
+
+            <TextView
+                android:text="Average Wait Time per Hour (sec)"
+                android:textStyle="bold"
+                android:textSize="18sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"/>
+
+            <com.github.mikephil.charting.charts.LineChart
+                android:id="@+id/chartWait"
+                android:layout_width="match_parent"
+                android:layout_height="260dp"/>
+        </LinearLayout>
+
+        <!-- C) Energy per Hour -->
         <LinearLayout
             android:orientation="vertical"
             android:padding="16dp"
@@ -67,7 +113,7 @@
             android:layout_height="wrap_content">
 
             <TextView
-                android:text="Trips per Hour"
+                android:text="Energy Consumption per Hour (kWh)"
                 android:textStyle="bold"
                 android:textSize="18sp"
                 android:layout_width="wrap_content"
@@ -75,9 +121,9 @@
                 android:layout_marginBottom="8dp"/>
 
             <com.github.mikephil.charting.charts.LineChart
-                android:id="@+id/chartTrips"
+                android:id="@+id/chartEnergy"
                 android:layout_width="match_parent"
-                android:layout_height="300dp"/>
+                android:layout_height="260dp"/>
         </LinearLayout>
 
     </LinearLayout>
