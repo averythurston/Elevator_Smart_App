@@ -33,7 +33,7 @@ data class StatsResponse(
     val avgWaitSec: Double,
     val avgTripSec: Double,
     val avgEnergyKWh: Double,
-    val peakHour: Int,
+    val totalCostCAD: Double,
     val elevators: List<ElevatorStats>,
     val hourly: List<HourlyStats>
 )

@@ -61,7 +61,7 @@ class StatisticsActivity : AppCompatActivity() {
 
     private fun updateUI(stats: StatsResponse) {
 
-        // -------- SUMMARY (peak hour removed) --------
+        // -------- SUMMARY (peak hour removed + COST ADDED) --------
         tvSummary.text =
             """
             Floors: ${stats.floorCount}
@@ -70,6 +70,7 @@ class StatisticsActivity : AppCompatActivity() {
             Avg Wait Time: ${"%.1f".format(stats.avgWaitSec)} sec
             Avg Trip Time: ${"%.1f".format(stats.avgTripSec)} sec
             Avg Energy: ${"%.3f".format(stats.avgEnergyKWh)} kWh
+            Total Cost: $${"%.4f".format(stats.totalCostCAD)} CAD
             """.trimIndent()
 
         // -------- PER-ELEVATOR METRICS --------
