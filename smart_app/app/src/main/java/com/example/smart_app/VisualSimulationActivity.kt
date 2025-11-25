@@ -8,12 +8,11 @@ import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.example.smart_app.data.ElevatorState
-import com.example.smart_app.data.SimApi
+import com.example.smart_app.data.*
 import kotlinx.coroutines.*
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.abs
 
 class VisualSimulationActivity : AppCompatActivity() {
 
@@ -36,6 +35,8 @@ class VisualSimulationActivity : AppCompatActivity() {
 
     private var pollingJob: Job? = null
     private var initializedLayout = false
+
+    private lateinit var mode: String
 
     private val shafts by lazy { listOf(shaft1, shaft2, shaft3) }
     private val elevators by lazy { listOf(elevator1, elevator2, elevator3) }
@@ -65,6 +66,8 @@ class VisualSimulationActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_visual_simulation)
 
+        mode = intent.getStringExtra("mode") ?: "simulation"
+
         tvBuilding = findViewById(R.id.tvBuilding)
         tvCurrentFloors = findViewById(R.id.tvCurrentFloors)
         tvLoad = findViewById(R.id.tvLoad)
@@ -78,6 +81,12 @@ class VisualSimulationActivity : AppCompatActivity() {
         elevator1 = findViewById(R.id.elevator1)
         elevator2 = findViewById(R.id.elevator2)
         elevator3 = findViewById(R.id.elevator3)
+
+        // Prototype mode → hide unused elevators
+        if (mode == "prototype") {
+            shaft2.visibility = View.GONE
+            shaft3.visibility = View.GONE
+        }
 
         findViewById<Button>(R.id.btnStats).setOnClickListener {
             startActivity(Intent(this, StatisticsActivity::class.java))
@@ -93,15 +102,23 @@ class VisualSimulationActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(frameRunnable)
     }
 
-    // ---------- Poll server slower; render loop handles smoothness ----------
+    // ---------- Poll correct server ----------
     private fun startPolling() {
         pollingJob = lifecycleScope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    val state = SimApi.api.getState()
                     val nowMs = SystemClock.elapsedRealtime()
 
+                    val state = if (mode == "simulation") {
+                        SimApi.api.getState()
+                    } else {
+                        // prototype → convert Arduino JSON → full StateResponse
+                        val p = PrototypeApi.api.getState()
+                        p.toStateResponse()
+                    }
+
                     withContext(Dispatchers.Main) {
+
                         if (!initializedLayout || state.floorCount != floorCount) {
                             floorCount = state.floorCount
                             buildFloorLabels()
@@ -117,14 +134,14 @@ class VisualSimulationActivity : AppCompatActivity() {
                             updateTrackFromServer(idx, e, nowMs)
                         }
                     }
-                } catch (_: Exception) { }
+                } catch (_: Exception) {}
 
                 delay(750)
             }
         }
     }
 
-    // Matches C++ travel_time_sec()
+    // ---------- Same animation logic ----------
     private fun travelTimeMs(floorsMoved: Int): Long {
         val sec = if (floorsMoved <= 1) 7.5
         else 7.5 + 7.5 + 7.0 * (floorsMoved - 2)
@@ -146,17 +163,11 @@ class VisualSimulationActivity : AppCompatActivity() {
                     t.startFloor = e.currentFloor
                     t.targetFloor = e.targetFloor
 
-                    // Use computed total (server model) for consistent speed
-                    t.totalTripMs = max(computedTotal, e.remainingMs)
-                    t.remainingMsReported = e.remainingMs
+                    t.totalTripMs = computedTotal
+                    t.remainingMsReported = computedTotal
                     t.lastServerUpdateMs = nowMs
                 } else {
-                    t.remainingMsReported = e.remainingMs
                     t.lastServerUpdateMs = nowMs
-
-                    if (computedTotal > t.totalTripMs) {
-                        t.totalTripMs = computedTotal
-                    }
                 }
             }
 
@@ -164,15 +175,10 @@ class VisualSimulationActivity : AppCompatActivity() {
                 t.isMoving = false
                 t.startFloor = e.currentFloor
                 t.targetFloor = e.currentFloor
-                t.totalTripMs = 0
-                t.remainingMsReported = 0
-                t.lastServerUpdateMs = nowMs
-
                 elevators[i].translationY = floorToY(e.currentFloor)
             }
 
             else -> {
-                // fail-safe: treat unknown as idle
                 t.isMoving = false
                 elevators[i].translationY = floorToY(e.currentFloor)
             }
@@ -190,11 +196,11 @@ class VisualSimulationActivity : AppCompatActivity() {
             val t = tracks[idx]
 
             if (t.isMoving && t.totalTripMs > 0) {
-                val elapsedSinceServer = nowMs - t.lastServerUpdateMs
-                val estRemaining = (t.remainingMsReported - elapsedSinceServer).coerceAtLeast(0)
+                val elapsed = nowMs - t.lastServerUpdateMs
+                val remaining = (t.remainingMsReported - elapsed).coerceAtLeast(0)
 
-                val progress =
-                    1f - (estRemaining.toFloat() / t.totalTripMs.toFloat()).coerceIn(0f, 1f)
+                val progress = 1f - (remaining.toFloat() / t.totalTripMs.toFloat())
+                    .coerceIn(0f, 1f)
 
                 val startY = floorToY(t.startFloor)
                 val targetY = floorToY(t.targetFloor)
@@ -204,6 +210,18 @@ class VisualSimulationActivity : AppCompatActivity() {
                 view.translationY = floorToY(e.currentFloor)
             }
         }
+    }
+
+    // ---------- UI Rendering ----------
+    private fun updateTopLabels(eStates: List<ElevatorState>) {
+        val e1 = eStates.getOrNull(0)
+
+        val modeText = if (mode == "simulation") "Simulation Mode" else "Prototype Mode"
+        tvBuilding.text = "$modeText — $floorCount Floors"
+
+        tvCurrentFloors.text = "Current Floor →  E1: ${e1?.currentFloor ?: "-"}"
+
+        tvLoad.text = "Load: E1 ${e1?.load ?: 0}/${e1?.capacity ?: 10}"
     }
 
     private fun buildFloorLabels() {
@@ -228,6 +246,9 @@ class VisualSimulationActivity : AppCompatActivity() {
         val shaftHeightPx = dpToPx(floorHeightDp * floorCount)
 
         shafts.forEachIndexed { idx, shaft ->
+
+            if (mode == "prototype" && idx > 0) return@forEachIndexed
+
             shaft.removeAllViews()
 
             val lp = shaft.layoutParams
@@ -248,24 +269,6 @@ class VisualSimulationActivity : AppCompatActivity() {
 
             shaft.addView(elevators[idx])
         }
-    }
-
-    private fun updateTopLabels(eStates: List<ElevatorState>) {
-        val e1 = eStates.getOrNull(0)
-        val e2 = eStates.getOrNull(1)
-        val e3 = eStates.getOrNull(2)
-
-        tvBuilding.text = "Simulation Mode — $floorCount Floors"
-
-        tvCurrentFloors.text =
-            "Current Floors →  E1: ${e1?.currentFloor ?: "-"} | " +
-                    "E2: ${e2?.currentFloor ?: "-"} | " +
-                    "E3: ${e3?.currentFloor ?: "-"}"
-
-        tvLoad.text =
-            "Load: E1 ${e1?.load ?: 0}/${e1?.capacity ?: 10}  |  " +
-                    "E2 ${e2?.load ?: 0}/${e2?.capacity ?: 10}  |  " +
-                    "E3 ${e3?.load ?: 0}/${e3?.capacity ?: 10}"
     }
 
     private fun floorToY(floor: Int): Float {
