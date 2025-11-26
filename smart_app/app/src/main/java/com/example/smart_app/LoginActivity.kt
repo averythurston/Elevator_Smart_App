@@ -18,7 +18,6 @@ class LoginActivity : AppCompatActivity() {
         setContentView(R.layout.activity_login)
 
         val btnSim = findViewById<Button>(R.id.btnSimulation)
-        val btnProto = findViewById<Button>(R.id.btnPrototype)
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
 
         btnSim.setOnClickListener {
@@ -39,13 +38,6 @@ class LoginActivity : AppCompatActivity() {
                     tvStatus.text = "Simulation server unreachable."
                 }
             }
-        }
-
-        btnProto.setOnClickListener {
-            val i = Intent(this, VisualSimulationActivity::class.java)
-            i.putExtra("mode", "prototype")
-            i.putExtra("floorCount", 5) // placeholder
-            startActivity(i)
         }
     }
 }
