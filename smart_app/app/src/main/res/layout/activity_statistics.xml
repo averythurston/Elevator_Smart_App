@@ -58,7 +58,7 @@
                 android:layout_height="wrap_content"/>
         </LinearLayout>
 
-        <!-- B) Elevator Utilization -->
+        <!-- Elevator Utilization -->
         <LinearLayout
             android:orientation="vertical"
             android:padding="16dp"
@@ -81,7 +81,7 @@
                 android:layout_height="260dp"/>
         </LinearLayout>
 
-        <!-- A) Avg Wait Time per Hour -->
+        <!-- Avg Wait Time per Hour -->
         <LinearLayout
             android:orientation="vertical"
             android:padding="16dp"
@@ -104,7 +104,7 @@
                 android:layout_height="260dp"/>
         </LinearLayout>
 
-        <!-- C) Energy per Hour -->
+        <!-- Energy per Hour -->
         <LinearLayout
             android:orientation="vertical"
             android:padding="16dp"

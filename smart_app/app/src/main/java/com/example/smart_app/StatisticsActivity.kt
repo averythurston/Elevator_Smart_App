@@ -90,14 +90,14 @@ class StatisticsActivity : AppCompatActivity() {
         }
         tvElevatorBreakdown.text = sb.toString()
 
-        // -------- CHARTS (B, A, C) --------
+        // -------- CHARTS --------
         updateUtilizationChart(stats)
         updateWaitChart(stats)
         updateEnergyChart(stats)
     }
 
     // =======================
-    // B) Elevator Utilization
+    // Elevator Utilization
     // =======================
     private fun updateUtilizationChart(stats: StatsResponse) {
         val entries = ArrayList<BarEntry>()
@@ -122,7 +122,7 @@ class StatisticsActivity : AppCompatActivity() {
     }
 
     // ===========================
-    // A) Avg Wait Time per Hour
+    // Avg Wait Time per Hour
     // ===========================
     private fun updateWaitChart(stats: StatsResponse) {
         val entries = ArrayList<Entry>()
@@ -143,7 +143,7 @@ class StatisticsActivity : AppCompatActivity() {
     }
 
     // ===========================
-    // C) Energy per Hour
+    // Energy per Hour
     // ===========================
     private fun updateEnergyChart(stats: StatsResponse) {
         val entries = ArrayList<Entry>()

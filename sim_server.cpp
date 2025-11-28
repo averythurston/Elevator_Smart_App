@@ -1,26 +1,10 @@
-// sim_server.cpp — Multi-elevator passenger simulation with real stats.
 // Windows build (MinGW):
 //   g++ sim_server.cpp -o sim_server -std=c++17 -lws2_32
 // Run:
 //   .\sim_server
-//
 // Endpoints:
 //   GET /state
 //   GET /stats/daily
-//
-// IMPORTANT FLOOR FIX:
-// Internally the sim logic is unchanged,
-// BUT floors are served as: 1 = bottom, gFloors = top.
-// We convert on output:
-//   publicFloor = gFloors - internalFloor + 1
-//   publicDirection = -internalDirection
-//
-// OPTION B PATCH (THIS FILE):
-// - Simulation logic unchanged except for dispatching.
-// - Energy model replaced with MATLAB-accurate physics.
-// - Adds stop-queue + least-cost dispatcher.
-// - Dedupes stops AND floor calls (Up/Down independently).
-// - Adds state + remainingMs back to /state for Android smooth animation.
 
 #include <iostream>
 #include <thread>
@@ -65,10 +49,10 @@ struct Elevator {
     int capacity = 10;
     std::vector<Passenger> onboard;
 
-    // NEW: Planned future stops (internal floors)
+    // Planned future stops (internal floors)
     std::deque<int> stops;
 
-    // per-elevator stats (UNCHANGED FIELDS)
+    // per-elevator stats 
     int trips = 0;
     int passengersMoved = 0;
     double energyKWh = 0.0;       // NET energy (consumed - regenerated) in kWh
@@ -93,9 +77,8 @@ struct GlobalStats {
     double totalTripSec = 0.0;
     int completedTrips = 0;
 
-    // ---------- NEW OPTION 2 ECONOMICS ----------
-    double totalEnergyConsumedWh = 0.0;     // MATLAB energyConsumed
-    double totalEnergyRegenWh = 0.0;        // MATLAB energyRegenerated
+    double totalEnergyConsumedWh = 0.0;     // energyConsumed
+    double totalEnergyRegenWh = 0.0;        // energyRegenerated
     double totalNetEnergyWh = 0.0;          // consumed - regen
 
     double totalCostCAD = 0.0;              // net energy * TOU
@@ -109,7 +92,7 @@ GlobalStats gStats;
 HourlyBucket gHourly[24];
 std::mutex gMutex;
 
-// NEW: floor call latches (dedupe Up and Down separately)
+// floor call latches (dedupe Up and Down separately)
 std::vector<bool> pendingUpCall;
 std::vector<bool> pendingDownCall;
 
@@ -145,18 +128,16 @@ bool should_spawn(double ratePerSec) {
 
 // -------- FLOOR OUTPUT CONVERSION HELPERS --------
 // Convert internal floor to public floor shown to app.
-// Public: 1 = bottom, gFloors = top.
 int toPublicFloor(int internalFloor) {
     return gFloors - internalFloor + 1;
 }
 
 // Convert internal direction to public direction.
-// If we flip floors, direction sign flips too.
 int toPublicDirection(int internalDir) {
     return -internalDir;
 }
 
-// ---------------- MATLAB CONSTANTS ----------------
+// ---------------- ENERGY CALCULATION CONSTANTS ----------------
 struct MatlabParams {
     double floorHeight_m = 5.0;
     double elevatorSpeed_mps = 1.5;
@@ -247,7 +228,7 @@ Passenger make_passenger(int floor) {
     Passenger p;
     p.startFloor = floor;
     p.destFloor = dest;
-    p.direction = (dest > floor ? +1 : -1);   // internal direction
+    p.direction = (dest > floor ? +1 : -1);   
     p.created = Clock::now();
     return p;
 }
@@ -276,7 +257,6 @@ void generate_traffic() {
 }
 
 // ---------------------------------------------------------
-// LOW-LEVEL fallback target selection (unchanged)
 // Used only if dispatcher hasn't assigned stops.
 // ---------------------------------------------------------
 int choose_next_target_fallback(const Elevator& e) {
@@ -298,7 +278,7 @@ int choose_next_target_fallback(const Elevator& e) {
 }
 
 // ---------------------------------------------------------
-// YOUR LEAST COST SCORING + HYBRID ASSIGNMENT
+// LEAST COST SCORING + HYBRID ASSIGNMENT
 // ---------------------------------------------------------
 double leastCostScore(const Elevator &el, int callFloor, int callDir) {
     double timePerFloor = travel_time_sec(1);  // seconds per floor equivalent
@@ -391,7 +371,7 @@ void dispatch_calls() {
 }
 
 // ---------------------------------------------------------
-// UPDATE ELEVATOR STATE MACHINE (logic unchanged except dispatch/stops)
+// UPDATE ELEVATOR STATE
 // ---------------------------------------------------------
 void update_elevator(Elevator& e, TimePoint now) {
     using namespace std::chrono;
@@ -448,7 +428,7 @@ void update_elevator(Elevator& e, TimePoint now) {
     else if (e.state == ElevatorState::Moving) {
         if (now >= e.stateEndTime) {
 
-            // ------------------ ENERGY + COST PATCH (MATLAB) ------------------
+            // ------------------ ENERGY + COST ------------------
             int startFloor = e.currentFloor;
             int endFloor   = e.targetFloor;
             int paxCount   = (int)e.onboard.size();
@@ -522,7 +502,7 @@ void update_elevator(Elevator& e, TimePoint now) {
                     e.onboard.push_back(p);
                     capLeft--;
 
-                    // NEW: add destination to stops, deduped
+                    // add destination to stops, deduped
                     if (std::find(e.stops.begin(), e.stops.end(), p.destFloor) == e.stops.end())
                         e.stops.push_back(p.destFloor);
                 }
@@ -556,7 +536,7 @@ void sim_loop() {
             std::lock_guard<std::mutex> lock(gMutex);
             generate_traffic();
 
-            // NEW: dispatch floor calls into stop queues
+            // dispatch floor calls into stop queues
             dispatch_calls();
 
             for (auto& e : gElevators)
@@ -567,7 +547,7 @@ void sim_loop() {
 }
 
 // ------------------------------------------------------------------
-// FIXED /state JSON, with state + remainingMs restored
+// /state JSON
 // ------------------------------------------------------------------
 std::string state_json() {
     std::lock_guard<std::mutex> lock(gMutex);
@@ -614,7 +594,7 @@ std::string state_json() {
 }
 
 // ------------------------------------------------------------------
-// /stats/daily JSON (Option 2 additions unchanged)
+// /stats/daily JSON
 // ------------------------------------------------------------------
 std::string stats_json() {
     std::lock_guard<std::mutex> lock(gMutex);
@@ -738,7 +718,7 @@ void handle_client(SOCKET c) {
 }
 
 // ------------------------------------------------------------------
-// MAIN — Corrected initialization for floor 1 = bottom (internal)
+// MAIN
 // ------------------------------------------------------------------
 int main() {
     WSADATA w;
